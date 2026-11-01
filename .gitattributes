@@ -1,0 +1,4 @@
+# lib/client.js 与源码行尾必须一致，否则 `npm run check:client` 在换行被转换的机器上误报
+* text=auto eol=lf
+*.png binary
+*.tgz binary

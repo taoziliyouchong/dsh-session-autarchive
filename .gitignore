@@ -1,0 +1,5 @@
+node_modules/
+*.tgz
+_tmp*
+.DS_Store
+build/

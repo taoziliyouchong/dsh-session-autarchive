@@ -1,0 +1,5 @@
+# dsh-session-autarchive：宿主半边（定时判定与归档、四条本机路由、一个工具）
+# 与浏览器半边（会话菜单标记、行首盾牌、设置里的天数）在同一行。
+- insert:
+    - id: dsh-session-autarchive
+      name: dsh-session-autarchive

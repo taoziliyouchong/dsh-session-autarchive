@@ -1,0 +1,64 @@
+{
+  "name": "dsh-session-autarchive",
+  "version": "0.1.0",
+  "description": "自动归档超期未用的会话：按会话档最后活动时间算候选，已归档、置顶与「不自动归档」名单都跳过；侧栏会话右键菜单可给单个会话加标记，通用设置里改天数。",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./invariant": "./invariant.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "invariant.js",
+    "cordis.patch.yml",
+    "src",
+    "lib/client.js",
+    "assets",
+    "scripts",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": []
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "session",
+    "archive",
+    "cleanup",
+    "sidebar"
+  ],
+  "scripts": {
+    "build:client": "node scripts/build-client.mjs",
+    "check:client": "node scripts/build-client.mjs --check",
+    "smoke": "node scripts/smoke.mjs",
+    "check": "node --check index.js && node --check invariant.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/taoziliyouchong/dsh-session-autarchive"
+  },
+  "homepage": "https://github.com/taoziliyouchong/dsh-session-autarchive#readme",
+  "bugs": {
+    "url": "https://github.com/taoziliyouchong/dsh-session-autarchive/issues"
+  }
+}
