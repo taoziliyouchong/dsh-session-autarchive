@@ -29,6 +29,8 @@ dsh plugin --profile desktop add github:taoziliyouchong/dsh-session-autarchive
 
 Restart DSH afterwards. Replace `desktop` with your own profile name if you use another one.
 
+Compatible with DSH 0.2.1-rc.5 (tested); 0.3 and later are not guaranteed.
+
 Once published to npm, this also works:
 
 ```sh
