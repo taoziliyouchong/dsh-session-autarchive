@@ -14,6 +14,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import * as zlib from 'node:zlib'
 
 /** Cordis 插件名。 */
 export const name = 'dsh-session-autarchive'
@@ -23,6 +24,17 @@ export const inject = ['tools']
 /** 路由前缀（与浏览器半边的 ROUTE 对齐；**前导斜杠不能省**——少了它路由挂不上，客户端一律 404）。 */
 const API_PREFIX = '/dsh-session-autarchive/api'
 const DAY_MS = 86400000
+
+/** zstd 帧头魔数（小端读出的值）。 */
+const ZSTD_MAGIC = 0xfd2fb528
+/** 刚被写过的会话留一小时宽限：正开着的那个不该在同一次 tick 里被收走。 */
+const GRACE_MS = 60 * 60 * 1000
+/** 一轮里最多解多少个档（解压是整份读进来，防止一次把几百兆都展开）。 */
+const MAX_DECODE = 400
+/** 会话档「最后一条对话结束时间」的缓存：同一个 文件+大小+写入时间 只解一次。 */
+const turnCache = new Map()
+/** 本轮还剩多少次解码额度（每次 plan 重置）。 */
+let decodeBudget = MAX_DECODE
 
 const DEFAULT_STATE = {
   enabled: true,
@@ -177,10 +189,128 @@ function scanSessions() {
       if (mtime === 0) {
         try { mtime = statSync(dir).mtimeMs } catch { /* 换成目录时间也算 */ }
       }
-      rows.push({ id: entry.name, mtime, workspace: ws.name })
+      rows.push({ id: entry.name, mtime, workspace: ws.name, dir })
     }
   }
   return rows
+}
+
+/**
+ * 定位会话档里所有完整 zstd 帧的字节范围（会话档是多帧拼接：一帧一条追加）。
+ * 算法与 DSH 自己的 scanZstdFrames 一致；尾部撕裂帧直接当结束。
+ */
+function scanZstdFrames(buffer) {
+  const frames = []
+  let offset = 0
+  while (offset < buffer.length) {
+    const start = offset
+    if (buffer.length - offset < 4) return frames
+    if (buffer.readUInt32LE(offset) !== ZSTD_MAGIC) return frames
+    offset += 4
+    if (offset === buffer.length) return frames
+    const descriptor = buffer.readUInt8(offset)
+    offset += 1
+    if ((descriptor & 0x18) !== 0) return frames
+    const contentSizeFlag = descriptor >>> 6
+    const singleSegment = (descriptor & 0x20) !== 0
+    const checksum = (descriptor & 0x04) !== 0
+    const dictionaryFlag = descriptor & 0x03
+    const dictionaryBytes = dictionaryFlag === 3 ? 4 : dictionaryFlag
+    const contentSizeBytes = contentSizeFlag === 0 ? (singleSegment ? 1 : 0) : 1 << contentSizeFlag
+    const remainingHeaderBytes = (singleSegment ? 0 : 1) + dictionaryBytes + contentSizeBytes
+    if (buffer.length - offset < remainingHeaderBytes) return frames
+    offset += remainingHeaderBytes
+    for (;;) {
+      if (buffer.length - offset < 3) return frames
+      const blockHeader = buffer.readUIntLE(offset, 3)
+      offset += 3
+      const lastBlock = (blockHeader & 1) !== 0
+      const blockType = (blockHeader >>> 1) & 0x03
+      const blockSize = blockHeader >>> 3
+      if (blockType === 0x03) return frames
+      const payloadBytes = blockType === 0x01 ? 1 : blockSize
+      if (buffer.length - offset < payloadBytes) return frames
+      offset += payloadBytes
+      if (lastBlock) break
+    }
+    if (checksum) {
+      if (buffer.length - offset < 4) return frames
+      offset += 4
+    }
+    frames.push({ start, end: offset })
+  }
+  return frames
+}
+
+/** 逐帧解压拼回整份文本；坏帧跳过，全坏返回空串。 */
+function decodeSessionText(buffer) {
+  const parts = []
+  for (const frame of scanZstdFrames(buffer)) {
+    try {
+      parts.push(zlib.zstdDecompressSync(buffer.subarray(frame.start, frame.end)).toString('utf8'))
+    } catch { /* 单帧坏了不影响别的帧 */ }
+  }
+  return parts.join('\n')
+}
+
+/** 会话目录里当前那一代的存档（多代并存时取最大的那份）。 */
+function sessionFileOf(dir) {
+  let best = ''
+  let bestSize = -1
+  let names
+  try { names = readdirSync(dir) } catch { return '' }
+  for (const name of names) {
+    if (!name.endsWith('.zstd')) continue
+    const full = join(dir, name)
+    let size = 0
+    try { size = statSync(full).size } catch { continue }
+    if (size > bestSize) { best = full; bestSize = size }
+  }
+  return best
+}
+
+/**
+ * 会话档里最后一条「对话结束」事件（turn/end）的时间。
+ *
+ * 为什么不用文件写入时间：会话被**打开/恢复**时，DSH 也会往档里追写
+ * 开场提示（session/end-seed、agent/inbox/spliced），文件时间被顶新，
+ * 于是一个 8 天没聊的会话看着像「4 天前还活着」，永远轮不到清理。
+ * 打开会话不算活动，所以只认 turn/end。
+ */
+function lastTurnEndMs(file) {
+  if (!file) return 0
+  if (decodeBudget <= 0) return 0
+  let st
+  try { st = statSync(file) } catch { return 0 }
+  const key = file + '|' + st.size + '|' + Math.floor(st.mtimeMs)
+  const hit = turnCache.get(key)
+  if (hit !== undefined) return hit
+  decodeBudget -= 1
+  let value = 0
+  try {
+    if (typeof zlib.zstdDecompressSync === 'function') {
+      const text = decodeSessionText(readFileSync(file))
+      for (const line of text.split('\n')) {
+        if (line.length < 20 || line.indexOf('turn/end') === -1) continue
+        try {
+          const event = JSON.parse(line)
+          if (event.type === 'turn/end' && typeof event.time === 'number' && event.time > value) value = event.time
+        } catch { /* 坏行跳过 */ }
+      }
+    }
+  } catch { value = 0 }
+  if (turnCache.size > 4000) turnCache.clear()
+  turnCache.set(key, value)
+  return value
+}
+
+/** 这一行该按什么时间判超期：文件太新就先问对话最后结束在什么时候。 */
+function activityMs(row, now, cutoff) {
+  if (row.mtime <= 0) return 0
+  if (row.mtime < cutoff) return row.mtime
+  if (now - row.mtime < GRACE_MS) return row.mtime
+  const last = lastTurnEndMs(sessionFileOf(row.dir))
+  return last > 0 ? last : row.mtime
 }
 
 /** 汇总一侧的事实：归档集、置顶集、保护名单、可见会话集。 */
@@ -199,14 +329,16 @@ function readFacts(ctx, state) {
 
 /** 算出这一轮该归档谁。 */
 function plan(ctx, state, now = Date.now()) {
+  decodeBudget = MAX_DECODE
   const facts = readFacts(ctx, state)
   const cutoff = now - Number(state.days) * DAY_MS
   const candidates = scanSessions()
-    .filter((row) => row.mtime > 0 && row.mtime < cutoff)
+    .map((row) => ({ ...row, last: activityMs(row, now, cutoff) }))
+    .filter((row) => row.last > 0 && row.last < cutoff)
     .filter((row) => !facts.archived.has(row.id) && !facts.guarded.has(row.id))
     .filter((row) => !(state.exemptPinned && facts.pinned.has(row.id)))
     .filter((row) => facts.visible === null || facts.visible.has(row.id))
-    .sort((a, b) => a.mtime - b.mtime)
+    .sort((a, b) => a.last - b.last)
   return { ...facts, candidates }
 }
 
@@ -266,10 +398,10 @@ function describe(state) {
 /** 状态文本（工具输出，也给路由复用）。 */
 function statusText(ctx, state, now = Date.now()) {
   const { candidates, archived, pinned, guarded } = plan(ctx, state, now)
-  const lines = [describe(state), '']
+  const lines = [describe(state), '判据：会话内最后一条对话结束（turn/end）；只是被打开/恢复过不算活动，读不到事件时退回文件写入时间', '']
   lines.push('当前候选（超期且未受保护）：' + candidates.length + ' 个')
   for (const c of candidates.slice(0, 30)) {
-    lines.push('  - ' + c.id.slice(8, 16) + '  最后活动 ' + stamp(c.mtime) + '（' + ago(c.mtime, now) + '）')
+    lines.push('  - ' + c.id.slice(8, 16) + '  最后对话 ' + stamp(c.last) + '（' + ago(c.last, now) + '）')
   }
   if (candidates.length > 30) lines.push('  …（其余 ' + (candidates.length - 30) + ' 个）')
   lines.push('')
@@ -322,7 +454,7 @@ function registerRoutes(ctx) {
             days: state.days,
             exemptPinned: state.exemptPinned,
             protected: state.protected,
-            candidates: candidates.map((c) => ({ id: c.id, mtime: c.mtime })),
+            candidates: candidates.map((c) => ({ id: c.id, mtime: c.last })),
             now,
           })
         } catch (error) {
@@ -419,7 +551,7 @@ function registerRoutes(ctx) {
 export function apply(ctx) {
   ctx.tools.register({
     name: 'dsh-session-autarchive',
-    description: '超期会话自动归档的开关台：status 看配置、保护名单与当前候选；run 立刻归档候选；protect/unprotect 标记单个会话「不自动归档」；config 改阈值与开关。判定口径＝会话档最后写入时间（$DSH_HOME/sessions），已归档、保护名单内、置顶（可关）都跳过。浏览器半边每 5 分钟按同一份清单自动执行，侧栏右键菜单的「不自动归档」也写这份名单。',
+    description: '超期会话自动归档的开关台：status 看配置、保护名单与当前候选；run 立刻归档候选；protect/unprotect 标记单个会话「不自动归档」；config 改阈值与开关。判定口径＝会话内最后一条对话结束事件（turn/end）的时间——只是被打开/恢复过（会追写开场提示）不算活动；读不到事件时退回文件最后写入时间。已归档、保护名单内、置顶（可关）都跳过。浏览器半边每 5 分钟按同一份清单自动执行，侧栏右键菜单的「不自动归档」也写这份名单。',
     parameters: {
       type: 'object',
       properties: {
@@ -459,7 +591,7 @@ export function apply(ctx) {
         for (const id of result.archived) lines.push('  ✓ ' + id.slice(8, 16))
         for (const line of result.failed) lines.push('  ✗ ' + line)
         if (args && args.dryRun === true) {
-          for (const c of result.candidates) lines.push('  · ' + c.id.slice(8, 16) + '  最后活动 ' + stamp(c.mtime))
+          for (const c of result.candidates) lines.push('  · ' + c.id.slice(8, 16) + '  最后对话 ' + stamp(c.last))
         }
         return { ok: true, text: lines.join('\n') }
       }

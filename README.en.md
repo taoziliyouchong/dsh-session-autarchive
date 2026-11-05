@@ -17,7 +17,7 @@ Archives sessions that have gone unused for longer than a configurable number of
 
 ## How it decides and runs
 
-- **Decision**: scan `$DSH_HOME/sessions/<workspace>/session-*` directories, take the newest file time inside each as "last activity". Sessions older than the threshold (5 days by default), not yet archived, not on the protected list, and not pinned (pinning is exempt by default) become pending sessions.
+- **Decision**: scan `$DSH_HOME/sessions/<workspace>/session-*` directories and read the time of the last `turn/end` (end of a conversation turn) event inside each session log as "last activity". Sessions older than the threshold (5 days by default), not yet archived, not on the protected list, and not pinned (pinning is exempt by default) become pending sessions. Merely opening or resuming a session does not count: resuming appends the opening prompt to the log, so the file write time is not used; when no event can be read, the file write time is the fallback. Sessions written to within the last hour are skipped for that round.
 - **Execution**: the host runs a round every 10 minutes (the first one 60 seconds after start, so it keeps running even with no window open); the browser half polls the pending list every 5 minutes and archives through the official channel when it is available, so the sidebar updates immediately.
 - Archiving goes through the official `archiveSession` call. It does not delete data: archived sessions stay in the archive list and can be restored.
 
