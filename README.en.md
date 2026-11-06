@@ -99,6 +99,13 @@ npm run check           # syntax
 
 The smoke run uses a temporary `$DSH_HOME`; it never reads or changes your session data. Build rules: keep `react` and `react/jsx-runtime` external (the DSH client module table provides them); the `id` inside the `window.__ModuleLoader__.load({ id, factory })` envelope must equal the package name.
 
+## Feedback
+
+- Open an issue: https://github.com/taoziliyouchong/dsh-session-autarchive/issues — searchable, and others can help.
+- Or reach me on QQ: **2171960697** (mention which plugin you installed when adding the contact).
+
+Please include: DSH version, plugin version, the exact error text, and a screenshot.
+
 ## License
 
 MIT

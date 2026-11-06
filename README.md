@@ -99,6 +99,15 @@ npm run check           # 语法
 
 冒烟全程用临时 `$DSH_HOME`，不读也不改你的会话数据。打包要求：`react` 与 `react/jsx-runtime` 保持 external（由 DSH 客户端模块表提供）；产物外壳 `window.__ModuleLoader__.load({ id, factory })` 里的 `id` 必须等于包名。
 
+## 反馈
+
+插件有问题，按这个顺序：
+
+1. 开 Issue：https://github.com/taoziliyouchong/dsh-session-autarchive/issues —— 能留痕、能搜历史，别人也可能已经遇过；
+2. 急着问或不想开 Issue，QQ 号：**2171960697**（加好友请注明装的是哪个插件）。
+
+反馈时带上：DSH 版本、插件版本、报错原文、截图。少一样多半要再问一轮。
+
 ## 许可
 
 MIT
