@@ -1,7 +1,7 @@
 {
   "name": "dsh-session-autarchive",
   "version": "0.1.2",
-  "description": "自动归档超期未用的会话：按会话内最后一条对话结束时间算候选（只是被打开/恢复过不算活动），已归档、置顶与「不自动归档」名单都跳过；侧栏会话右键菜单可给单个会话加标记，通用设置里改天数。",
+  "description": "把长期没动过的会话自动归档（默认 5 天），单个会话可以标成不归档。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -53,6 +53,7 @@
   "devDependencies": {
     "esbuild": "^0.28.1"
   },
+  "author": "taoziliyouchong",
   "license": "MIT",
   "repository": {
     "type": "git",
