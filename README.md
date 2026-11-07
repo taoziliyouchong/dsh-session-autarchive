@@ -29,7 +29,7 @@ dsh plugin --profile desktop add github:taoziliyouchong/dsh-session-autarchive
 
 装完重启 DSH。用别的 profile 就把 `desktop` 换成你的 profile 名。
 
-兼容：DSH 0.2.1-alpha.3 ～ 0.2.2-rc.1（本机实际运行验证过的最高版本）；更高版本未验证。
+要求 DSH >= 0.2.1-alpha.3；实测 0.2.1-alpha.3、0.2.2-rc.1，更高版本未验证。
 
 发布到 npm 之后也可以：
 
