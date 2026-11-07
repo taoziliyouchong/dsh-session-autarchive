@@ -549,87 +549,99 @@ function registerRoutes(ctx) {
 
 /** 注册工具与路由。 */
 export function apply(ctx) {
-  ctx.tools.register({
-    name: 'dsh-session-autarchive',
-    description: '超期会话自动归档的开关台：status 看配置、保护名单与当前候选；run 立刻归档候选；protect/unprotect 标记单个会话「不自动归档」；config 改阈值与开关。判定口径＝会话内最后一条对话结束事件（turn/end）的时间——只是被打开/恢复过（会追写开场提示）不算活动；读不到事件时退回文件最后写入时间。已归档、保护名单内、置顶（可关）都跳过。浏览器半边每 5 分钟按同一份清单自动执行，侧栏右键菜单的「不自动归档」也写这份名单。',
-    parameters: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', description: '要做什么：status（默认，看状态）｜run（立刻归档候选）｜protect（标记不自动归档）｜unprotect（取消标记）｜config（改阈值/开关）' },
-        sessionId: { type: 'string', description: 'protect/unprotect 用：会话 id，形如 session-xxxxxxxx-…' },
-        dryRun: { type: 'boolean', description: 'run 用：true 时只列候选、不动手' },
-        days: { type: 'number', description: 'config 用：多少天没动就归档，默认 5' },
-        enabled: { type: 'boolean', description: 'config 用：是否启用自动归档' },
-        exemptPinned: { type: 'boolean', description: 'config 用：置顶会话是否也豁免（默认豁免）' },
-      },
-      required: [],
-      additionalProperties: false,
-    },
-    output: {
-      schema: {
+  // 工具注册失败（重名、DSH 升级后格式漂移）不该拖垮路由与兜底定时：
+  // 单独圈起来，失败只留一行警告，归档主功能照常。
+  try {
+    ctx.tools.register({
+      name: 'dsh-session-autarchive',
+      description: '超期会话自动归档的开关台：status 看配置、保护名单与当前候选；run 立刻归档候选；protect/unprotect 标记单个会话「不自动归档」；config 改阈值与开关。判定口径＝会话内最后一条对话结束事件（turn/end）的时间——只是被打开/恢复过（会追写开场提示）不算活动；读不到事件时退回文件最后写入时间。已归档、保护名单内、置顶（可关）都跳过。浏览器半边每 5 分钟按同一份清单自动执行，侧栏右键菜单的「不自动归档」也写这份名单。',
+      parameters: {
         type: 'object',
-        properties: { ok: { type: 'boolean' }, text: { type: 'string' } },
-        required: ['ok', 'text'],
+        properties: {
+          action: { type: 'string', description: '要做什么：status（默认，看状态）｜run（立刻归档候选）｜protect（标记不自动归档）｜unprotect（取消标记）｜config（改阈值/开关）' },
+          sessionId: { type: 'string', description: 'protect/unprotect 用：会话 id，形如 session-xxxxxxxx-…' },
+          dryRun: { type: 'boolean', description: 'run 用：true 时只列候选、不动手' },
+          days: { type: 'number', description: 'config 用：多少天没动就归档，默认 5' },
+          enabled: { type: 'boolean', description: 'config 用：是否启用自动归档' },
+          exemptPinned: { type: 'boolean', description: 'config 用：置顶会话是否也豁免（默认豁免）' },
+        },
+        required: [],
         additionalProperties: false,
       },
-      render: (_args, value) => [{ type: 'text', text: value.text }],
-    },
-    async execute(args) {
-      const action = String((args && args.action) || 'status')
-      let state = readState()
-
-      if (action === 'status') {
-        return { ok: true, text: statusText(ctx, state) }
-      }
-
-      if (action === 'run') {
-        const result = await runArchive(ctx, state, args && args.dryRun === true)
-        const head = args && args.dryRun === true
-          ? '干跑：候选 ' + result.candidates.length + ' 个，未动手'
-          : '已归档 ' + result.archived.length + ' 个' + (result.failed.length > 0 ? '，失败 ' + result.failed.length + ' 个' : '')
-        const lines = [head]
-        for (const id of result.archived) lines.push('  ✓ ' + id.slice(8, 16))
-        for (const line of result.failed) lines.push('  ✗ ' + line)
-        if (args && args.dryRun === true) {
-          for (const c of result.candidates) lines.push('  · ' + c.id.slice(8, 16) + '  最后对话 ' + stamp(c.last))
+      output: {
+        schema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' }, text: { type: 'string' } },
+          required: ['ok', 'text'],
+          additionalProperties: false,
+        },
+        render: (_args, value) => [{ type: 'text', text: value.text }],
+      },
+      async execute(args) {
+        const action = String((args && args.action) || 'status')
+        let state = readState()
+  
+        if (action === 'status') {
+          return { ok: true, text: statusText(ctx, state) }
         }
-        return { ok: true, text: lines.join('\n') }
-      }
-
-      if (action === 'protect' || action === 'unprotect') {
-        const sessionId = String((args && args.sessionId) || '')
-        if (!/^session-/.test(sessionId)) return { ok: false, text: 'protect/unprotect 需要 sessionId（形如 session-xxxxxxxx-…）' }
-        const keep = new Set(state.protected)
-        if (action === 'protect') keep.add(sessionId)
-        else keep.delete(sessionId)
-        state = { ...state, protected: [...keep] }
-        writeProtected(state.protected)
-        audit((action === 'protect' ? 'protect ' : 'unprotect ') + sessionId + '，名单现有 ' + state.protected.length + ' 个')
-        return {
-          ok: true,
-          text: (action === 'protect' ? '已标记不自动归档：' : '已取消标记：') + sessionId
-            + '\n保护名单现有 ' + state.protected.length + ' 个',
+  
+        if (action === 'run') {
+          const result = await runArchive(ctx, state, args && args.dryRun === true)
+          const head = args && args.dryRun === true
+            ? '干跑：候选 ' + result.candidates.length + ' 个，未动手'
+            : '已归档 ' + result.archived.length + ' 个' + (result.failed.length > 0 ? '，失败 ' + result.failed.length + ' 个' : '')
+          const lines = [head]
+          for (const id of result.archived) lines.push('  ✓ ' + id.slice(8, 16))
+          for (const line of result.failed) lines.push('  ✗ ' + line)
+          if (args && args.dryRun === true) {
+            for (const c of result.candidates) lines.push('  · ' + c.id.slice(8, 16) + '  最后对话 ' + stamp(c.last))
+          }
+          return { ok: true, text: lines.join('\n') }
         }
-      }
-
-      if (action === 'config') {
-        const next = { ...state }
-        if (args.days !== undefined) next.days = Number(args.days) > 0 ? Number(args.days) : next.days
-        if (args.enabled !== undefined) next.enabled = args.enabled === true
-        if (args.exemptPinned !== undefined) next.exemptPinned = args.exemptPinned === true
-        writeState(next)
-        return { ok: true, text: '已更新：' + describe(next) }
-      }
-
-      return { ok: false, text: '不认识的 action：' + action + '（可用 status／run／protect／unprotect／config）' }
-    },
-  })
+  
+        if (action === 'protect' || action === 'unprotect') {
+          const sessionId = String((args && args.sessionId) || '')
+          if (!/^session-/.test(sessionId)) return { ok: false, text: 'protect/unprotect 需要 sessionId（形如 session-xxxxxxxx-…）' }
+          const keep = new Set(state.protected)
+          if (action === 'protect') keep.add(sessionId)
+          else keep.delete(sessionId)
+          state = { ...state, protected: [...keep] }
+          writeProtected(state.protected)
+          audit((action === 'protect' ? 'protect ' : 'unprotect ') + sessionId + '，名单现有 ' + state.protected.length + ' 个')
+          return {
+            ok: true,
+            text: (action === 'protect' ? '已标记不自动归档：' : '已取消标记：') + sessionId
+              + '\n保护名单现有 ' + state.protected.length + ' 个',
+          }
+        }
+  
+        if (action === 'config') {
+          const next = { ...state }
+          if (args.days !== undefined) next.days = Number(args.days) > 0 ? Number(args.days) : next.days
+          if (args.enabled !== undefined) next.enabled = args.enabled === true
+          if (args.exemptPinned !== undefined) next.exemptPinned = args.exemptPinned === true
+          writeState(next)
+          return { ok: true, text: '已更新：' + describe(next) }
+        }
+  
+        return { ok: false, text: '不认识的 action：' + action + '（可用 status／run／protect／unprotect／config）' }
+      },
+    })
+  } catch (error) {
+    console.warn('[dsh-session-autarchive] 工具未注册：' + (error && error.message ? error.message : error))
+  }
 
   registerRoutes(ctx)
 
   // 宿主侧兜底：浏览器窗口没开着也照常归档（客户端那条是让侧栏当场刷新的快通道）。
   // 启动 60 秒后第一次（避开启动竞争），之后每 10 分钟。
-  const tick = () => { void runArchive(ctx, readState(), false).catch(() => { /* 这轮不行，下一轮再来 */ }) }
+  // 开关每次现读：关掉自动归档后这条定时链要立刻停，不能等重启。
+  // 手动执行（工具／路由的 run）不在这里拦，那是用户主动点的，开关只管自动。
+  const tick = () => {
+    const state = readState()
+    if (!state.enabled) return
+    void runArchive(ctx, state, false).catch(() => { /* 这轮不行，下一轮再来 */ })
+  }
   const first = setTimeout(tick, 60 * 1000)
   const timer = setInterval(tick, 10 * 60 * 1000)
   if (typeof ctx.effect === 'function') {

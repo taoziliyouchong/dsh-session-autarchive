@@ -2,20 +2,21 @@
 /**
  * 本机冒烟：不起应用、不发网络请求、不碰真实会话数据。
  *
- * 六关：
+ * 七关：
  *   1. 包结构      —— files 声明的必需文件都在（含已提交的 lib/client.js）
  *   2. 组合声明    —— dsh.bundle.patch 指向的文件在，且里面的 insert id 等于包名
  *   3. 宿主半边    —— 桩 ctx 跑 apply：注册 1 个工具、4 条路由，路径与包名一致
  *   4. 路由鉴权    —— 非回环 403、非 POST 405、坏会话 id 400
  *   5. 状态读写    —— 指向临时 DSH_HOME：改天数、加名单后回读一致
- *   6. 客户端产物  —— 外壳 id == 包名，产物里带上了路由与四个 slot 名
+ *   6. 开关生效    —— enabled=false 时兜底定时不归档，手动 run 仍归档
+ *   7. 客户端产物  —— 外壳 id == 包名，产物里带上了路由与四个 slot 名
  *
  * 用法：node scripts/smoke.mjs   （任一条失败退出码 1）
  *
  * ⚠️ 全程使用临时 DSH_HOME，跑完删掉；不会读到或改到你自己的会话数据。
  */
 
-import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -33,7 +34,6 @@ const fail = (label, why) => {
 /** 1. 包结构 */
 const REQUIRED = [
   'index.js',
-  'invariant.js',
   'cordis.patch.yml',
   'src/entry.jsx',
   'lib/client.js',
@@ -184,7 +184,74 @@ if (routes.length === wanted.length) {
   }
 }
 
-/** 6. 客户端产物 */
+/** 6. 开关生效：enabled=false 时兜底定时不归档；手动 run 不受限 */
+{
+  // 造一个 30 天前的会话目录（档里没有 turn/end，判定退回文件写入时间）
+  const wsDir = join(home, 'sessions', 'ws-smoke')
+  const sessDir = join(wsDir, 'session-smoke-old')
+  mkdirSync(sessDir, { recursive: true })
+  const oldFile = join(sessDir, 'session.v4.jsonl.zstd')
+  writeFileSync(oldFile, '')
+  const oldStamp = new Date(Date.now() - 30 * 86400000)
+  utimesSync(oldFile, oldStamp, oldStamp)
+  utimesSync(sessDir, oldStamp, oldStamp)
+
+  // 用一份新的桩 ctx 跑 apply，并把 60 秒的首次定时立即点一次
+  const tickOnce = async (enabled) => {
+    await call(routeOf('/config'), { method: 'POST', body: { enabled } })
+    const archived = []
+    const registry = {
+      archivedSessionIds: [],
+      pinnedSessionIds: [],
+      list: () => [{ sessionIds: ['session-smoke-old'] }],
+      archiveSession: async (id) => { archived.push(id) },
+    }
+    const hostTools = []
+    const hostCtx = {
+      tools: { register: (tool) => { hostTools.push(tool) } },
+      get: (name) => (name === 'webServer' ? webServer : name === 'workspaceRegistry' ? registry : undefined),
+      effect: (fn) => {
+        const cleanup = fn()
+        if (typeof cleanup === 'function') cleanups.push(cleanup)
+      },
+    }
+    const realSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = (fn, ms) => {
+      if (ms === 60 * 1000) { fn(); return { unref() {} } }
+      return realSetTimeout(fn, ms)
+    }
+    try {
+      mod.apply(hostCtx)
+      await new Promise((resolve) => setImmediate(resolve))
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      globalThis.setTimeout = realSetTimeout
+    }
+    return { archived, tools: hostTools }
+  }
+
+  const off = await tickOnce(false)
+  // 先记下定时链这一轮的归档数：手动 run 会往同一个数组里记，不能等到 run 之后再判
+  const tickArchivedWhileOff = off.archived.length
+  const manualTool = off.tools[0]
+  let manualArchived = false
+  if (manualTool) {
+    const result = await manualTool.execute({ action: 'run' })
+    manualArchived = result && result.ok === true && /已归档 1 个/.test(result.text)
+  }
+  const on = await tickOnce(true)
+  if (tickArchivedWhileOff !== 0) {
+    fail('开关生效', 'enabled=false 时兜底定时仍归档了 ' + tickArchivedWhileOff + ' 个')
+  } else if (!manualArchived) {
+    fail('开关生效', 'enabled=false 时手动 run 没有归档候选')
+  } else if (on.archived.length !== 1) {
+    fail('开关生效', 'enabled=true 时兜底定时归档 ' + on.archived.length + ' 个，应为 1')
+  } else {
+    ok('开关生效', '关闭时定时不归档、手动照常、打开后恢复')
+  }
+}
+
+/** 7. 客户端产物 */
 const client = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
 const idMatch = /^\s*id:\s*"([^"]+)"/m.exec(client)
 const SLOTS = [
@@ -199,7 +266,30 @@ else if (!client.includes(pkg.name + '/api')) fail('客户端产物', '产物里
 else {
   const absent = SLOTS.filter((slot) => !client.includes(slot))
   if (absent.length > 0) fail('客户端产物', '产物里缺 slot：' + absent.join('、'))
+  else if (!client.includes('session-autarchive-enabled')) fail('客户端产物', '产物里没有设置开关行（源码改了但没重新构建）')
   else ok('客户端产物', 'id=' + pkg.name + '，' + Buffer.byteLength(client, 'utf8') + ' 字节')
+}
+
+/** 8. 失败隔离：工具注册抛错时，路由与定时器照常 */
+{
+  const routesAfter = []
+  let effects = 0
+  const hostWeb = { port: 0, register: (route) => { routesAfter.push(route); return () => {} } }
+  const throwingCtx = {
+    tools: { register: () => { throw new Error('simulated duplicate tool') } },
+    get: (name) => (name === 'webServer' ? hostWeb : undefined),
+    effect: (fn) => {
+      effects += 1
+      const cleanup = fn()
+      if (typeof cleanup === 'function') cleanups.push(cleanup)
+    },
+  }
+  let threw = null
+  try { mod.apply(throwingCtx) } catch (error) { threw = error }
+  if (threw) fail('失败隔离', '工具注册抛错后 apply 整体抛出：' + threw.message)
+  else if (routesAfter.length !== 4) fail('失败隔离', '工具注册抛错后注册了 ' + routesAfter.length + ' 条路由，应为 4')
+  else if (effects !== 5) fail('失败隔离', '工具注册抛错后 effect 登记 ' + effects + ' 个，应为 5（4 条路由 + 1 个定时器）')
+  else ok('失败隔离', '工具注册抛错，路由 4 条与定时器照常')
 }
 
 /** 收尾：清掉宿主半边的定时器与临时目录 */

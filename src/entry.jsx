@@ -242,6 +242,73 @@ const ROW_CSS = `
 .zsa-error { font-size:12px; line-height:18px; color:var(--dsw-alias-state-error-primary); }
 `
 
+/** 开关：纯内联样式，不 import 宿主组件包。 */
+function Switch({ on, disabled, onChange }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={on ? '关闭自动归档' : '开启自动归档'}
+      disabled={disabled}
+      onClick={() => onChange(!on)}
+      style={{
+        width: 36, height: 20, flex: 'none', border: 0, borderRadius: 10, padding: 0,
+        cursor: disabled ? 'default' : 'pointer', position: 'relative',
+        background: on ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l1)',
+        opacity: disabled ? 0.5 : 1, transition: 'background .15s',
+      }}
+    >
+      <span style={{
+        position: 'absolute', top: 2, left: on ? 18 : 2, width: 16, height: 16,
+        borderRadius: 8, background: '#fff', transition: 'left .15s',
+      }} />
+    </button>
+  )
+}
+
+/**
+ * 通用设置里的一行：自动归档开关。
+ * 关掉后宿主定时链与浏览器侧都不再自动归档；手动 run 不受影响（宿主那边也这么判）。
+ * @returns 一行设置。
+ */
+export function AutoArchiveToggleRow() {
+  const state = useStore()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const on = state.enabled !== false
+
+  const toggle = async (next) => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const data = await call('POST', ROUTE + '/config', { enabled: next })
+      patchStore({ enabled: data.enabled !== false })
+    } catch (err) {
+      setError('没保存上：' + String((err && err.message) || err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="zsa-item">
+      <style>{ROW_CSS}</style>
+      <div className="zsa-text">
+        <div className="zsa-title">自动归档</div>
+        <div className="zsa-desc">
+          {'关闭后后台不再自动归档；手动执行仍然可用。当前候选 ' + state.candidates.length + ' 个。'}
+        </div>
+        {error ? <div className="zsa-error" role="alert">{error}</div> : null}
+      </div>
+      <div className="zsa-field">
+        <Switch on={on} disabled={busy} onChange={(next) => void toggle(next)} />
+      </div>
+    </div>
+  )
+}
+
 /**
  * 通用设置里的一行：自动归档天数。
  * 失焦或回车即落盘（与设置里其它行一样即时生效），写的是宿主同一个 days 字段。
@@ -301,7 +368,7 @@ export function AutoArchiveRow() {
           max={3650}
           step={1}
           value={value}
-          disabled={busy}
+          disabled={busy || state.enabled === false}
           aria-label="自动归档天数"
           onChange={(event) => { setDraft(event.target.value); setError(null) }}
           onBlur={() => { void commit() }}
@@ -339,8 +406,14 @@ export function apply(ctx) {
   place(ctx, 'sidebar.session.row.leading', 100, ProtectLeading)
   place(ctx, 'sidebar.session.row.hover', 100, ProtectHover)
 
-  // 通用设置里一行，排在「当前版本」上面（order 95，当前版本是 100）：自动归档天数。
+  // 通用设置里两行，排在「当前版本」上面（order 94/95，当前版本是 100）：
+  // 「自动归档」开关与「自动归档天数」。先开关后天数，与页面从上到下的阅读顺序一致。
   try {
+    ctx.slots.inject('settings.general.item', () => ctx.slots.register({
+      name: 'settings.general.item',
+      id: 'session-autarchive-enabled',
+      order: 94,
+    }, AutoArchiveToggleRow))
     ctx.slots.inject('settings.general.item', () => ctx.slots.register({
       name: 'settings.general.item',
       id: 'session-autarchive-days',

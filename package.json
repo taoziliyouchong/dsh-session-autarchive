@@ -1,18 +1,16 @@
 {
   "name": "dsh-session-autarchive",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "把长期没动过的会话自动归档（默认 5 天），单个会话可以标成不归档。",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
-    "./invariant": "./invariant.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
-    "invariant.js",
     "cordis.patch.yml",
     "src",
     "lib/client.js",
@@ -48,7 +46,7 @@
     "build:client": "node scripts/build-client.mjs",
     "check:client": "node scripts/build-client.mjs --check",
     "smoke": "node scripts/smoke.mjs",
-    "check": "node --check index.js && node --check invariant.js"
+    "check": "node --check index.js"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"
