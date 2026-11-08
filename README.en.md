@@ -11,6 +11,7 @@ Archives sessions that have gone unused for longer than a configurable number of
 | Where | What it looks like | What it does |
 |---|---|---|
 | Session context menu | One row, "Do not auto-archive", next to Pin / Rename / Fork / Archive | Click once to mark, again to unmark |
+| Session row trailing | On hover, a shield button next to the archive icon (hollow when unmarked, filled when marked) | Toggle "do not auto-archive" without opening the overflow menu |
 | Session row start | A small shield on marked sessions | Shows at a glance that the session is protected |
 | Hover card | One line, "Not auto-archived" | Same, with text |
 | General settings | A row at the bottom, "Auto-archive after (days)" | Saved on blur or Enter, writes the same host field |
@@ -29,7 +30,7 @@ dsh plugin --profile desktop add github:taoziliyouchong/dsh-session-autarchive
 
 Restart DSH afterwards. Replace `desktop` with your own profile name if you use another one.
 
-Requires DSH >= 0.2.1-alpha.3; verified on 0.2.1-alpha.3 and 0.2.2-rc.1, later versions untested.
+Requires DSH >= 0.2.1-alpha.1 (lower bound inferred from the services and slots the plugin uses, all present in alpha.1); verified on 0.2.1-alpha.3 and 0.2.2-rc.1, later versions untested.
 
 Once published to npm, this also works:
 
@@ -70,7 +71,7 @@ Writes are temp-file-then-rename, and reads retry — a half-written file is nev
 ## How it works
 
 - The host half registers four local routes: `GET /dsh-session-autarchive/api/state`, `POST .../protect`, `POST .../config`, `POST .../run`. Loopback addresses only (`127.*`, `::1`, `::ffff:127.*`); anything else gets 403, a wrong method gets 405.
-- The browser half mounts four slots (menu row, row start, hover card, settings row). Services are probed with `ctx.get`; when one is missing that entry is skipped and the others still mount.
+- The browser half mounts five slots (menu row, row action, row start, hover card, settings row). Services are probed with `ctx.get`; when one is missing that entry is skipped and the others still mount.
 - No network access, nothing uploaded. Decisions use local file times only.
 
 ## Known limits
@@ -85,7 +86,7 @@ Writes are temp-file-then-rename, and reads retry — a half-written file is nev
 The source has two halves:
 
 - `index.js` — host side (decision, archiving, four routes, the tool)
-- `src/entry.jsx` — browser side (menu row, row shield, hover line, settings row, the 5-minute fast path)
+- `src/entry.jsx` — browser side (menu row, row action shield, row shield, hover line, settings row, the 5-minute fast path)
 
 Editing `src/entry.jsx` requires rebuilding. `lib/client.js` is a build artifact committed to the repository; without it the UI does not load:
 

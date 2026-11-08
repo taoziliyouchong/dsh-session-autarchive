@@ -256,6 +256,7 @@ const client = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
 const idMatch = /^\s*id:\s*"([^"]+)"/m.exec(client)
 const SLOTS = [
   'sidebar.workspaces.session.menu.item',
+  'sidebar.workspaces.session.row.action',
   'sidebar.session.row.leading',
   'sidebar.session.row.hover',
   'settings.general.item',

@@ -1,11 +1,12 @@
 /**
  * 超期会话自动归档（浏览器半边源码）。
  *
- * 会话列表上三处，都只在「点开菜单」或「被标记」之后才出现：
+ * 会话列表上四处：
  *  1. 会话菜单里平铺一行「不自动归档」——与官方「置顶会话／重命名／分叉会话／归档会话」同层并列，不另造「更多」；
- *  2. 被标记的会话行首一个小盾牌；
- *  3. 悬停卡片里一行说明。
- * 行尾那排悬停图标按钮**不放东西**（不与归档／置顶图标并排）。
+ *  2. 行尾悬停图标组里、归档图标紧旁边一个盾牌按钮（order 150，落在归档 100 与置顶 200 之间），
+ *     未保护空心盾、已保护实心盾，点它开／关「不自动归档」——不用点开「更多」；
+ *  3. 被标记的会话行首一个小盾牌；
+ *  4. 悬停卡片里一行说明。
  * 设置里一行：通用设置最底「自动归档天数」（`settings.general.item`），失焦或回车即落盘。
  * 外加每 5 分钟拉一次宿主的候选清单：拿得到官方归档通道就顺手归档，拿不到就只刷新名单——
  * 判定在宿主，宿主自己有兜底定时（窗口没开也照常归档）。
@@ -140,6 +141,28 @@ function ShieldIcon({ size = 14 }) {
   )
 }
 
+/**
+ * 「已标记」实心盾：与描边版同一个轮廓，换成填充，被保护的会话一眼可辨。
+ * @param props.size - 边长，默认 14。
+ * @returns 一个实心盾牌。
+ */
+function ShieldFilledIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false"
+      fill="currentColor" stroke="none">
+      <path d="M12 3l7 2.6v5.2c0 4.3-3 8.2-7 9.4-4-1.2-7-5.1-7-9.4V5.6L12 3z" />
+    </svg>
+  )
+}
+
+/** 行尾图标按钮：数值照 Rows.module.css 的 `.iconButton`（16px 格、14px 字形、tertiary → hover primary）。 */
+const ROW_ACTION = {
+  flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: '16px', height: '16px', border: 'none', borderRadius: 'var(--dsw-radius-xs)',
+  padding: 0, background: 'transparent', cursor: 'pointer',
+  color: 'var(--dsw-alias-label-tertiary)',
+}
+
 /** 菜单行：照 ui-primitives Menu.module.css 的 `.item`。 */
 const ITEM = {
   display: 'flex', alignItems: 'center', gap: '6px', width: '100%', minHeight: '34px',
@@ -197,6 +220,48 @@ export function ProtectMenuItem(props) {
       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {on ? '取消「不自动归档」' : '不自动归档'}
       </span>
+    </button>
+  )
+}
+
+/**
+ * 行尾悬停按钮（order 150，紧挨归档图标）：盾牌一档，点它开／关「不自动归档」。
+ * 未保护＝空心盾，已保护＝实心盾；标题与 aria-label 写明当前状态要发生什么。
+ * 与官方置顶／归档按钮同一排同一套样式；点击不打开会话行（宿主 rowActions 已截住冒泡）。
+ * @param props - 行身份。
+ * @returns 一个图标按钮。
+ */
+export function ProtectRowAction(props) {
+  const { sessionId } = props
+  const state = useStore()
+  const [hover, setHover] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const on = state.protected.has(sessionId)
+  const label = on ? '取消「不自动归档」' : '不自动归档'
+  const click = () => {
+    if (busy) return
+    setBusy(true)
+    void toggleProtect(sessionId, !on)
+      .catch(() => { /* 路由没挂或写盘失败：不改本地状态，界面保持原样 */ })
+      .finally(() => setBusy(false))
+  }
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={on}
+      disabled={busy}
+      onClick={click}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        ...ROW_ACTION,
+        color: hover && !busy ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-tertiary)',
+        opacity: busy ? 0.4 : 1,
+      }}
+    >
+      {on ? <ShieldFilledIcon /> : <ShieldIcon />}
     </button>
   )
 }
@@ -401,8 +466,10 @@ export function apply(ctx) {
     } catch { /* 清理不了也只是多一个定时器 */ }
   } catch { /* 见上 */ }
 
-  // 三处：菜单里并列一行 ＋ 行首标记 ＋ 悬停说明。行尾那排图标按钮不放东西。
+  // 四处：菜单里并列一行 ＋ 行尾悬停组里归档旁的盾牌按钮 ＋ 行首标记 ＋ 悬停说明。
+  // 行尾按钮 order 150：归档是 100、置顶是 200，插在两者之间，紧挨归档。
   place(ctx, 'sidebar.workspaces.session.menu.item', 450, ProtectMenuItem)
+  place(ctx, 'sidebar.workspaces.session.row.action', 150, ProtectRowAction)
   place(ctx, 'sidebar.session.row.leading', 100, ProtectLeading)
   place(ctx, 'sidebar.session.row.hover', 100, ProtectHover)
 

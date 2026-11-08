@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-autarchive",
-  "version": "0.1.5",
+  "version": "0.1.7",
   "description": "把长期没动过的会话自动归档（默认 5 天），单个会话可以标成不归档。",
   "type": "module",
   "main": "index.js",
@@ -22,7 +22,7 @@
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": ">=0.2.1-0"
+    "dsh": ">=0.2.1-alpha.1"
   },
   "dsh": {
     "client": {
