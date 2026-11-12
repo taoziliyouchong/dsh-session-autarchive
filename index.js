@@ -304,6 +304,33 @@ function lastTurnEndMs(file) {
   return value
 }
 
+/**
+ * 会话档里有没有工作树记录（DSH 0.2.2 起：每次创建 worktree 记一条 `plugin:worktree/created`）。
+ *
+ * 为什么要拦：0.2.2 归档会话会顺手 `git worktree remove` 掉干净的工作树目录（只保分支和提交），
+ * 被忽略的文件/未跟踪文件不会保留。自动归档是无人值守动作，不能替使用者做这个决定，
+ * 所以带工作树记录的会话一律跳过，留给使用者自己归档。
+ */
+function hasWorktreeEvent(dir) {
+  if (!dir) return false
+  const file = sessionFileOf(dir)
+  if (!file) return false
+  if (decodeBudget <= 0) return false
+  decodeBudget -= 1
+  try {
+    if (typeof zlib.zstdDecompressSync !== 'function') return false
+    const text = decodeSessionText(readFileSync(file))
+    for (const line of text.split('\n')) {
+      if (line.length < 20 || line.indexOf('worktree/created') === -1) continue
+      try {
+        const event = JSON.parse(line)
+        if (typeof event.type === 'string' && event.type.indexOf('worktree/created') !== -1) return true
+      } catch { /* 坏行跳过 */ }
+    }
+  } catch { /* 解不开就当没有 */ }
+  return false
+}
+
 /** 这一行该按什么时间判超期：文件太新就先问对话最后结束在什么时候。 */
 function activityMs(row, now, cutoff) {
   if (row.mtime <= 0) return 0
@@ -348,14 +375,17 @@ async function runArchive(ctx, state, dryRun) {
   if (!registry || typeof registry.archiveSession !== 'function') {
     return { archived: [], failed: ['宿主没有 workspaceRegistry 服务，无法归档'], candidates }
   }
-  if (dryRun) return { archived: [], failed: [], candidates }
+  if (dryRun) return { archived: [], failed: [], skipped: [], candidates }
   const archived = []
   const failed = []
+  const skipped = []
   for (const item of candidates) {
     // 名单可能在候选算完之后才改：动手前再看一眼名单，保护优先于这一轮的候选
     let guardedNow = false
     try { guardedNow = readProtected().includes(item.id) } catch { guardedNow = false }
     if (guardedNow) continue
+    // 带工作树记录的会话不自动归档：0.2.2 归档会删掉干净的工作树目录，这个决定交给使用者
+    if (hasWorktreeEvent(item.dir)) { skipped.push(item.id); continue }
     try {
       await registry.archiveSession(item.id)
       archived.push(item.id)
@@ -367,11 +397,13 @@ async function runArchive(ctx, state, dryRun) {
   const next = {
     ...readState(),
     lastRunAt: Date.now(),
-    lastResult: '归档 ' + archived.length + ' 个' + (failed.length > 0 ? '，失败 ' + failed.length + ' 个' : ''),
+    lastResult: '归档 ' + archived.length + ' 个'
+      + (skipped.length > 0 ? '，跳过工作树 ' + skipped.length + ' 个' : '')
+      + (failed.length > 0 ? '，失败 ' + failed.length + ' 个' : ''),
   }
   writeState(next)
-  audit('run 候选 ' + candidates.length + ' 个，归档 ' + archived.length + ' 个，失败 ' + failed.length + ' 个')
-  return { archived, failed, candidates, state: next }
+  audit('run 候选 ' + candidates.length + ' 个，归档 ' + archived.length + ' 个，跳过工作树 ' + skipped.length + ' 个，失败 ' + failed.length + ' 个')
+  return { archived, failed, skipped, candidates, state: next }
 }
 
 /** 本地时间文本（不写日期后缀，只用于人读）。 */
